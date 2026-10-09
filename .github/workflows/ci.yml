@@ -1,0 +1,72 @@
+# These marks are shown on other pages -- the landing page, the documentation
+# site (which pins this repository as a submodule at a release tag) and the
+# organisation profile. A mark that came out blank or the wrong size looks like
+# a broken image on somebody else's page, and nothing here would have said so.
+# So the invariants are checked rather than remembered, with nothing installed:
+# a PNG's dimensions are bytes 16 to 24 of the file.
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  assets:
+    name: the marks are what the README says they are
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # 512 is the family's avatar size. A failed render is a few hundred
+      # bytes where a real mark is several kilobytes, so size catches a blank.
+      - name: Every avatar is 512x512 and not blank
+        run: |
+          set -u
+          fail=0
+          files=$(ls avatar/*.png 2>/dev/null) || { echo "::error::no avatars at all"; exit 1; }
+          for p in $files; do
+            magic=$(od -An -tx1 -N8 "$p" | tr -d ' \n')
+            if [ "$magic" != "89504e470d0a1a0a" ]; then
+              echo "::error::$p: not a PNG"; fail=1; continue
+            fi
+            w=$(od -An -tu4 --endian=big -j16 -N4 "$p" | tr -d ' ')
+            h=$(od -An -tu4 --endian=big -j20 -N4 "$p" | tr -d ' ')
+            size=$(wc -c < "$p")
+            if [ "$w" != 512 ] || [ "$h" != 512 ]; then
+              echo "::error::$p: ${w}x${h} -- must be 512x512"; fail=1
+            elif [ "$size" -lt 5000 ]; then
+              echo "::error::$p: $size bytes -- too small to hold a mark; a blank render looks like this"; fail=1
+            else
+              echo "$p: ${w}x${h}, $size bytes"
+            fi
+          done
+          exit $fail
+
+      # The family kit is svg in three variants, png 16 to 1024 in three
+      # variants, jpg, ico, icns, an avatar and a social banner. A check that
+      # counts is cheaper than remembering, and the docs site mounts some of
+      # these paths by name: a missing one is a missing favicon there.
+      - name: Every subject has the whole family matrix
+        run: |
+          set -u
+          subjects=$(ls svg/color/*.svg 2>/dev/null | sed 's|.*/||;s|\.svg$||') \
+            || { echo "::error::no colour SVG at all"; exit 1; }
+          missing=0
+          need() { [ -f "$1" ] || { echo "::error::missing $1"; missing=$((missing + 1)); }; }
+          for s in $subjects; do
+            for v in color white black; do
+              need "svg/$v/$s.svg"
+              for px in 16 32 48 64 128 256 512 1024; do need "png/$v/$px/$s.png"; done
+            done
+            for px in 16 32 48 64 128 256 512 1024; do need "jpg/$px/$s.jpg"; done
+            need "avatar/$s.png"; need "social/$s.png"
+          done
+          need ico/go-widgets.ico; need icns/go-widgets.icns; need LICENSE
+          echo "$(echo "$subjects" | wc -l) subject(s), $missing missing"
+          [ "$missing" -eq 0 ]
